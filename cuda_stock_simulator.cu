@@ -24,13 +24,15 @@ struct StockParams {
     int paths;
 };
 
-std::vector<float> readStockDataFromCSV(const std::string &filename) {
+std::vector<float> readStockDataFromCSV(const std::string &filename, PerformanceTimer& timer) {
+    timer.start_timing();
     
     std::vector<float> prices;
     std::ifstream file(filename);
     
     if (!file.is_open()) {
         std::cerr << "Failed to open file: " << filename << std::endl;
+        timer.stop_timing("file_open_failed");
         return prices;
     }
     
@@ -49,14 +51,17 @@ std::vector<float> readStockDataFromCSV(const std::string &filename) {
     }
     
     
+    timer.stop_timing("read_csv_data");
     return prices;
 }
 
-void computeParameters(const std::vector<float>& prices, float &S0, float &mu, float &sigma) {
+void computeParameters(const std::vector<float>& prices, float &S0, float &mu, float &sigma, PerformanceTimer& timer) {
+    timer.start_timing();
     
     if (prices.size() < 2) {
         S0 = prices.empty() ? 0.0f : prices.back();
         mu = sigma = 0.0f;
+        timer.stop_timing("compute_params_insufficient_data");
         return;
     }
     S0 = prices.back();
@@ -77,6 +82,7 @@ void computeParameters(const std::vector<float>& prices, float &S0, float &mu, f
     mu    = avg   * 252.0f;
     sigma = stddev * std::sqrt(252.0f);
     
+    timer.stop_timing("compute_parameters");
 }
 
 __global__ void initRNG(curandState *states, unsigned long seed, int paths) {
@@ -102,15 +108,15 @@ __global__ void monteCarloGBM(float *d_results, curandState *states,
 }
 
 __global__ void computeMeanPath(float *d_results, double *meanPath,
-                              int steps, int paths) {
-    int id = blockIdx.x * blockDim.x + threadIdx.x;
-    if (id >= steps) return;
+    int steps, int paths) {
+int id = blockIdx.x * blockDim.x + threadIdx.x;
+if (id >= steps) return;
 
-    double sum = 0.0;
-    for (int i = 0; i < paths; ++i) {
-        sum += d_results[i*steps + id];
-    }
-    meanPath[id] = sum / paths;
+double sum = 0.0;
+for (int i = 0; i < paths; ++i) {
+sum += d_results[i*steps + id];
+}
+meanPath[id] = sum / paths;
 }
 
 void checkCudaError(const char* msg) {
@@ -122,6 +128,7 @@ void checkCudaError(const char* msg) {
 }
 
 void simulateStock(const StockParams& stock, PerformanceTimer& timer) {
+    timer.start_timing();
     int total = stock.steps * stock.paths;
     std::vector<float> h_results(total);
     float *d_results;
@@ -129,13 +136,16 @@ void simulateStock(const StockParams& stock, PerformanceTimer& timer) {
 
     cudaMalloc(&d_results, sizeof(float)*total);
     cudaMalloc(&d_states,  sizeof(curandState)*stock.paths);
+    timer.stop_timing("cuda_memory_allocation");
 
+    timer.start_timing();
     int threads = 256;
     int blocks  = (stock.paths + threads - 1) / threads;
 
     initRNG<<<blocks, threads>>>(d_states, std::time(nullptr), stock.paths);
     cudaDeviceSynchronize();  
     checkCudaError("initRNG");
+    timer.stop_timing("cuda_rng_initialization");
 
     timer.start_timing();
     monteCarloGBM<<<blocks, threads>>>(d_results, d_states,
@@ -143,12 +153,15 @@ void simulateStock(const StockParams& stock, PerformanceTimer& timer) {
                                      stock.dt, stock.steps, stock.paths);
     cudaDeviceSynchronize();  
     checkCudaError("monteCarloGBM");
-    timer.stop_timing("monte_carlo_simulation");
+    timer.stop_timing("cuda_monte_carlo_simulation");
 
+    timer.start_timing();
     cudaMemcpy(h_results.data(), d_results,
              sizeof(float)*total, cudaMemcpyDeviceToHost);
     checkCudaError("cudaMemcpy");
+    timer.stop_timing("cuda_copy_results_to_host");
 
+    timer.start_timing();
     fs::path outDir = "predictions";
     fs::create_directories(outDir);
 
@@ -165,7 +178,6 @@ void simulateStock(const StockParams& stock, PerformanceTimer& timer) {
         }
         std::cout << "Saved predicted traversals to " << simPath << std::endl;
     }
-
     timer.start_timing();
     double *d_meanPath;
     cudaMalloc(&d_meanPath, sizeof(double)*stock.steps);
@@ -181,6 +193,8 @@ void simulateStock(const StockParams& stock, PerformanceTimer& timer) {
     checkCudaError("cudaFree_meanPath");
     timer.stop_timing("compute_mean_path");
 
+
+    timer.start_timing();
     fs::path predPath = outDir / ("cuda_prediction_walk_" + stock.ticker + ".csv");
     std::ofstream pf(predPath);
     if (!pf.is_open()) {
@@ -192,9 +206,12 @@ void simulateStock(const StockParams& stock, PerformanceTimer& timer) {
         }
         std::cout << "Saved mean walk prediction to " << predPath << std::endl;
     }
+    timer.stop_timing("cuda_save_mean_path");
 
+    timer.start_timing();
     cudaFree(d_results);
     cudaFree(d_states);
+    timer.stop_timing("cuda_cleanup");
 }
 
 int main(int argc, char** argv) {
@@ -204,6 +221,7 @@ int main(int argc, char** argv) {
     }
 
     PerformanceTimer timer("cuda", ticker);
+    timer.start_timing();
 
     std::string dataFile = "historic_data/" + ticker + "_historical.csv";
     if (!fs::exists(dataFile)) {
@@ -211,9 +229,10 @@ int main(int argc, char** argv) {
         timer.stop_timing("check_data_file");
         return 1;
     }
+    timer.stop_timing("check_data_file");
 
     std::cout << "Reading data from " << dataFile << "...\n";
-    auto prices = readStockDataFromCSV(dataFile);
+    auto prices = readStockDataFromCSV(dataFile, timer);
     
     if (prices.empty()) {
         std::cerr << "No data read; exiting.\n";
@@ -223,7 +242,7 @@ int main(int argc, char** argv) {
     std::cout << "Read " << prices.size() << " price points.\n";
 
     float S0, mu, sigma;
-    computeParameters(prices, S0, mu, sigma);
+    computeParameters(prices, S0, mu, sigma, timer);
     std::cout << "Computed S0=" << S0 << " mu=" << mu << " sigma=" << sigma << "\n";
 
 
@@ -236,7 +255,9 @@ int main(int argc, char** argv) {
 
     std::cout << "Starting simulation with " << stock.paths << " paths over " << stock.steps << " days...\n";
     
+    timer.start_timing();
     simulateStock(stock, timer);
+    timer.stop_timing("total_simulation_time");
     
     timer.save_to_csv();
     
