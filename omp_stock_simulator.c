@@ -10,12 +10,11 @@
 #include <algorithm>
 #include <random>
 #include <chrono>
-#include <omp.h>  // OpenMP header
-#include "timer_util.h"  // Include our timing utility
+#include <omp.h>  
+#include "timer_util.h"  
 
 namespace fs = std::filesystem;
 
-// Structure to hold stock parameters for simulation
 struct StockParams {
     std::string ticker;
     float S0;
@@ -26,16 +25,13 @@ struct StockParams {
     int paths;
 };
 
-// Parse date-price pairs from CSV file
-std::vector<float> readStockDataFromCSV(const std::string &filename, PerformanceTimer& timer) {
-    timer.start_timing();
+std::vector<float> readStockDataFromCSV(const std::string &filename) {
     
     std::vector<float> prices;
     std::ifstream file(filename);
     
     if (!file.is_open()) {
         std::cerr << "Failed to open file: " << filename << std::endl;
-        timer.stop_timing("file_open_failed");
         return prices;
     }
     
@@ -54,17 +50,14 @@ std::vector<float> readStockDataFromCSV(const std::string &filename, Performance
     }
     
     
-    timer.stop_timing("read_csv_data");
     return prices;
 }
 
-void computeParameters(const std::vector<float>& prices, float &S0, float &mu, float &sigma, PerformanceTimer& timer) {
-    timer.start_timing();
+void computeParameters(const std::vector<float>& prices, float &S0, float &mu, float &sigma) {
     
     if (prices.size() < 2) {
         S0 = prices.empty() ? 0.0f : prices.back();
         mu = sigma = 0.0f;
-        timer.stop_timing("compute_params_insufficient_data");
         return;
     }
     
@@ -86,16 +79,13 @@ void computeParameters(const std::vector<float>& prices, float &S0, float &mu, f
     mu    = avg   * 252.0f;
     sigma = stddev * std::sqrt(252.0f);
     
-    timer.stop_timing("compute_parameters");
 }
 
 void simulateStock(const StockParams& stock, PerformanceTimer& timer) {
-    timer.start_timing();
     std::vector<std::vector<float>> results(stock.paths, std::vector<float>(stock.steps));
     
     int num_threads = omp_get_max_threads();
     std::cout << "Running with " << num_threads << " OpenMP threads" << std::endl;
-    timer.stop_timing("omp_memory_allocation");
     
     timer.start_timing();
     #pragma omp parallel
@@ -114,9 +104,8 @@ void simulateStock(const StockParams& stock, PerformanceTimer& timer) {
             }
         }
     }  
-    timer.stop_timing("omp_monte_carlo_simulation");
+    timer.stop_timing("monte_carlo_simulation");
 
-    timer.start_timing();
     fs::path outDir = "predictions";
     fs::create_directories(outDir);
 
@@ -133,7 +122,6 @@ void simulateStock(const StockParams& stock, PerformanceTimer& timer) {
         }
         std::cout << "Saved predicted traversals to " << simPath << std::endl;
     }
-    timer.stop_timing("omp_save_traversals");
 
     timer.start_timing();
     std::vector<double> meanPath(stock.steps, 0.0);
@@ -160,9 +148,8 @@ void simulateStock(const StockParams& stock, PerformanceTimer& timer) {
     for (int j = 0; j < stock.steps; ++j) {
         meanPath[j] /= stock.paths;
     }
-    timer.stop_timing("omp_compute_mean_path");
+    timer.stop_timing("compute_mean_path");
 
-    timer.start_timing();
     fs::path predPath = outDir / ("omp_prediction_walk_" + stock.ticker + ".csv");
     std::ofstream pf(predPath);
     if (!pf.is_open()) {
@@ -174,7 +161,6 @@ void simulateStock(const StockParams& stock, PerformanceTimer& timer) {
         }
         std::cout << "Saved mean walk prediction to " << predPath << std::endl;
     }
-    timer.stop_timing("omp_save_mean_path");
 }
 
 int main(int argc, char** argv) {
@@ -184,18 +170,15 @@ int main(int argc, char** argv) {
     }
 
     PerformanceTimer timer("openmp", ticker);
-    timer.start_timing();
 
     std::string dataFile = "historic_data/" + ticker + "_historical.csv";
     if (!fs::exists(dataFile)) {
         std::cout << "Data file not found: " << dataFile << "\n";
-        timer.stop_timing("check_data_file");
         return 1;
     }
-    timer.stop_timing("check_data_file");
 
     std::cout << "Reading data from " << dataFile << "...\n";
-    auto prices = readStockDataFromCSV(dataFile, timer);
+    auto prices = readStockDataFromCSV(dataFile);
     
     if (prices.empty()) {
         std::cerr << "No data read; exiting.\n";
@@ -205,7 +188,7 @@ int main(int argc, char** argv) {
     std::cout << "Read " << prices.size() << " price points.\n";
 
     float S0, mu, sigma;
-    computeParameters(prices, S0, mu, sigma, timer);
+    computeParameters(prices, S0, mu, sigma);
     std::cout << "Computed S0=" << S0 << " mu=" << mu << " sigma=" << sigma << "\n";
 
     StockParams stock {
@@ -217,9 +200,7 @@ int main(int argc, char** argv) {
     
     std::cout << "Starting simulation with " << stock.paths << " paths over " << stock.steps << " days...\n";
     
-    timer.start_timing();
     simulateStock(stock, timer);
-    timer.stop_timing("total_simulation_time");
     
     timer.save_to_csv();
     
