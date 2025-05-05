@@ -3,3 +3,4 @@ omp_sim
 seq_sim
 *.png
 *.csv
+.vscode
