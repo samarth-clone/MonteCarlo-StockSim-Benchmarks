@@ -50,7 +50,6 @@ std::vector<float> readStockDataFromCSV(const std::string &filename, Performance
         }
     }
     
-    std::reverse(prices.begin(), prices.end());
     
     timer.stop_timing("read_csv_data");
     return prices;

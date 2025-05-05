@@ -41,7 +41,6 @@ std::vector<float> readStockDataFromCSV(const std::string &filename, Performance
     
     std::string line;
     while (std::getline(file, line)) {
-        // Parse each line which has format: YYYY-MM-DD,PRICE
         size_t commaPos = line.find(',');
         if (commaPos != std::string::npos) {
             std::string priceStr = line.substr(commaPos + 1);
@@ -54,14 +53,11 @@ std::vector<float> readStockDataFromCSV(const std::string &filename, Performance
         }
     }
     
-    // Reverse to get chronological order (oldest to newest)
-    std::reverse(prices.begin(), prices.end());
     
     timer.stop_timing("read_csv_data");
     return prices;
 }
 
-// Compute S0, mu, sigma from historical prices
 void computeParameters(const std::vector<float>& prices, float &S0, float &mu, float &sigma, PerformanceTimer& timer) {
     timer.start_timing();
     
@@ -87,20 +83,16 @@ void computeParameters(const std::vector<float>& prices, float &S0, float &mu, f
         var += (r-avg)*(r-avg);
 
     float stddev = std::sqrt(var / logReturns.size());
-    // annualize
     mu    = avg   * 252.0f;
     sigma = stddev * std::sqrt(252.0f);
     
     timer.stop_timing("compute_parameters");
 }
 
-// Run the OpenMP parallel sim and write to predictions/
 void simulateStock(const StockParams& stock, PerformanceTimer& timer) {
-    // Allocate memory for results
     timer.start_timing();
     std::vector<std::vector<float>> results(stock.paths, std::vector<float>(stock.steps));
     
-    // Get number of available threads
     int num_threads = omp_get_max_threads();
     std::cout << "Running with " << num_threads << " OpenMP threads" << std::endl;
     timer.stop_timing("omp_memory_allocation");
