@@ -1,3 +1,5 @@
 cuda_sim
+omp_sim
+seq_sim
 *.png
 *.csv
